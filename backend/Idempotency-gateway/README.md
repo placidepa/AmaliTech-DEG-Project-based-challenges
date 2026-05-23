@@ -182,9 +182,10 @@ Submit a payment for processing with idempotency guarantees.
 ```
 
 | Field      | Type   | Rules                                                                           |
-||--||
+|------------|--------|---------------------------------------------------------------------------------|
 | `amount`   | float  | Must be greater than 0                                                          |
 | `currency` | string | Exactly 3 characters, ISO 4217 (e.g. GHS, USD, RWF). Normalised to uppercase.  |
+
 
 **Response body (`201 Created`):**
 
@@ -201,19 +202,22 @@ Submit a payment for processing with idempotency guarantees.
 
 **Response headers:**
 
+
 | Header             | Present when                   | Value                    |
-|--|--|--|
+|--------------------|--------------------------------|--------------------------|
 | `X-Transaction-ID` | Every successful response      | UUID of the transaction  |
 | `X-Cache-Hit`      | Duplicate (replayed) requests  | `true`                   |
 
 **Status codes:**
 
+
 | Code  | Scenario                                                         |
-|-||
+|-------|------------------------------------------------------------------|
 | `201` | First request — payment charged and stored                       |
 | `201` | Duplicate request — cached result replayed (`X-Cache-Hit: true`) |
 | `409` | Same key reused with a different request body                    |
 | `422` | Validation error — invalid amount, bad currency, missing header  |
+
 
 
 
