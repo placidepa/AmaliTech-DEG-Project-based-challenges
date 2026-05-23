@@ -2,7 +2,8 @@
 
 A payment processing API with strict idempotency guarantees. Prevents double charges on network retries using per-key locking and SHA-256 payload fingerprinting.
 
-
+**Live API**: https://finsafe-idempotency-api.onrender.com
+**Swagger UI**: https://finsafe-idempotency-api.onrender.com/docs
 
 ## Architecture Diagram
 
@@ -167,7 +168,7 @@ Submit a payment for processing with idempotency guarantees.
 **Headers:**
 
 | Header            | Required | Description                                       |
-|-|-||
+|-------------------|----------|---------------------------------------------------|
 | `Idempotency-Key` | Yes      | Unique client-generated key (UUID v4 recommended) |
 | `Content-Type`    | Yes      | `application/json`                                |
 
