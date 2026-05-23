@@ -1,155 +1,285 @@
-# Idempotency-Gateway (The "Pay-Once" Protocol)
+# FinSafe Idempotency API
 
-This challenge is designed to test your ability to bridge Computer Science fundamentals with Modern Backend Engineering.
+A payment processing API with strict idempotency guarantees. Prevents double charges on network retries using per-key locking and SHA-256 payload fingerprinting.
 
-## 1. Business Context
 
-> **Client:** _FinSafe Transactions Ltd._ (A fast-growing Payment Processor).
 
-### The Problem
+## Architecture Diagram
 
-FinSafe's clients (e-commerce shops) occasionally experience network timeouts. When this happens, their servers automatically retry sending payment requests. Recently, this has led to a critical issue: **Double Charging**.
+### Request Flow
 
-If a customer clicks "Pay," the request is sent, but the network lags. The client retries the request. FinSafe processes _both_ requests, charging the customer twice. This is causing customer churn and regulatory headaches.
+![Request Flow](images/Request_Flow.png)
 
-### The Solution
+Every incoming request is fingerprinted with SHA-256. If the key is new, the payment is processed (2-second bank delay), stored in Redis, and a **201** is returned. If the key already exists and the hash matches, the stored response is returned instantly with `X-Cache-Hit: true`. If the hash differs, a **409 Conflict** is raised — the key is locked to its original payload to prevent fraud or accidental tampering.
 
-FinSafe needs you to build an **Idempotency Layer**. This is a middleware service (or API) that ensures no matter how many times a client sends the same request, the payment is processed **exactly once**.
 
----
 
-## 2. Technical Objective
+### Race Condition — Concurrent Duplicate Requests
 
-Build a RESTful API that mimics a payment processing backend. It must check for a unique `Idempotency-Key` in the HTTP headers.
+![Race Condition](images/Race_Condition.png)
 
-- **First Request:** Process the payment and save the response.
-- **Duplicate Request:** Detect the existing key and return the _saved_ response immediately, without processing the payment again.
+When two requests with the same key arrive at the same time, the per-key `asyncio.Lock` ensures only one proceeds. Request A acquires the lock and runs the bank call. Request B blocks until A completes, then reads the COMPLETED record from Redis and returns it directly — same response, same `transaction_id`, no double charge.
 
----
 
-## 3. Getting Started
 
-1.  **Fork this Repository:** Do not clone it directly. Create a fork to your own GitHub account.
-2.  **Environment:** You may use **Node.js, Python, Java or Go, etc.**. You may use any database or in-memory store (Redis, SQLite, or a simple native Map/Dictionary variable).
-3.  **Submission:** Your final submission will be a link to your forked repository containing the source code and documentation.
+## Setup Instructions
 
----
+### Prerequisites
 
-## 4. The Architecture Diagram
+- Python 3.10 or higher
+- An [Upstash Redis](https://upstash.com/) account (free tier is enough) — provides a managed Redis with a `rediss://` connection URL
+- `uv` package manager (recommended) — [install here](https://docs.astral.sh/uv/getting-started/installation/)
+- Or plain `pip` works too
 
-**Task:** Before you write any code, you must design the logic flow.
-**Deliverable:** A **Sequence Diagram** or **Flowchart** included in your README.
+### 1. Clone the repository
 
----
+```bash
+git clone `https://github.com/placidepa/AmaliTech-DEG-Project-based-challenges.git`
+cd backend/Idempotency-gateway
+```
 
-## 5. User Stories & Acceptance Criteria
+### 2. Create and activate a virtual environment
 
-### User Story 1: The First Transaction (Happy Path)
+```bash
+uv venv
+```
 
-**As a** client system (e.g., an online store),
-**I want to** send a payment request with a unique ID,
-**So that** my transaction is processed successfully.
+Activate it:
 
-**Acceptance Criteria:**
+```bash
+# Windows (PowerShell):
+.venv\Scripts\activate
 
-- [ ] The API accepts a `POST` request to endpoint `/process-payment`.
-- [ ] The request header must contain `Idempotency-Key: <some-unique-string>`.
-- [ ] The request body accepts a JSON object (e.g., `{"amount": 100, "currency": "GHS"}`).
-- [ ] The server simulates processing (e.g., a 2-second delay) and returns a `200 OK` or `201 Created` response.
-- [ ] The response body should include a status message: `"Charged 100 GHS"`.
+# Windows (Command Prompt):
+.venv\Scripts\activate.bat
 
-### User Story 2: The Duplicate Attempt (Idempotency Logic)
+# macOS / Linux:
+source .venv/bin/activate
+```
 
-**As a** client system,
-**I want to** safely retry a request if I don't hear back,
-**So that** I don't accidentally double-charge the user.
+### 3. Install dependencies
 
-**Acceptance Criteria:**
+```bash
+# With uv (recommended):
+uv pip install -r requirements.txt
 
-- [ ] If the client sends a second `POST` request with the **same** `Idempotency-Key` and payload:
-  - [ ] The server must **NOT** run the processing logic again (no 2-second delay).
-  - [ ] The server must return the **exact same** response body and status code as the first successful request.
-  - [ ] The server returns a header `X-Cache-Hit: true` to indicate this was a replayed response.
+# Or with pip:
+pip install -r requirements.txt
+```
 
-### User Story 3: Different Request, Same Key (Fraud/Error Check)
+### 4. Configure Upstash Redis
 
-**As a** security officer,
-**I want to** reject requests that reuse keys for different payments,
-**So that** we maintain data integrity.
+Create a `.env` file in the project root using the values from your Upstash console (**Redis > REST API**):
 
-**Acceptance Criteria:**
+```
+UPSTASH_REDIS_REST_URL=https://<user-host>.upstash.io
+UPSTASH_REDIS_REST_TOKEN=<user-token>
+```
 
-- [ ] If a request arrives with an existing `Idempotency-Key` but a **different** request body (e.g., changing amount from 100 to 500):
-  - [ ] The server must return a `422 Unprocessable Entity` or `409 Conflict` error.
-  - [ ] The error message should state: `"Idempotency key already used for a different request body."`
+The app constructs the `rediss://` connection URL automatically from these two variables.
 
----
+### 5. Start the server
 
-## 6. Bonus User Story (The "In-Flight" Check)
+```bash
+uvicorn main:app --app-dir app --reload
+```
 
-**As a** system architect,
-**I want to** handle cases where two identical requests arrive at the exact same time,
-**So that** we don't succumb to race conditions.
+Expected output:
 
-**Scenario:** Request A arrives. While Request A is still "processing" (during the 2-second delay), Request B (same key) arrives.
+```
+INFO:     Started server process
+INFO:     Waiting for application startup.
+INFO:     FinSafe Idempotency API starting up...
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+```
 
-**Acceptance Criteria:**
+### 6. Explore
 
-- [ ] Request B should not start a new process.
-- [ ] Request B should not return `409 Conflict`.
-- [ ] Request B should wait (block) until Request A finishes, and then return the result of Request A.
+- **Swagger UI**: http://127.0.0.1:8000/docs
+- **Health check**: http://127.0.0.1:8000/
 
----
+### Optional: Enable debug logging
 
-## 7. The "Developer's Choice" Challenge
+Add to your `.env`:
 
-We believe great engineers are also product thinkers.
+```
+DEBUG=true
+```
 
-**Task:** Identify **one** additional feature or safety mechanism that would make this system better for a real-world Fintech company.
+Restart the server for more verbose logs.
 
-1.  **Implement it.**
-2.  **Document it:** Explain _why_ you added it in your README.
 
----
 
-## 8. Documentation Requirements
+### Running Tests
 
-Your final `README.md` must replace these instructions. It must cover:
+Tests use `fakeredis` — no real Redis or Upstash credentials needed.
 
-1.  **Architecture Diagram**
-2.  **Setup Instructions**
-3.  **API Documentation**
-4.  **Design Decisions**
-5.  **The Developer's Choice:** Description of the extra feature you added.
+```bash
+pip install -r requirements.txt
+pytest tests/ -v
+```
 
----
 
-Submit your repo link via the [online](https://forms.cloud.microsoft/e/bLyGT3byxx) form.
 
----
+### Alternative: Run with Docker Compose
 
-## 🛑 Pre-Submission Checklist
+Requires a `.env` file with `UPSTASH_REDIS_REST_URL` set (the compose file loads it automatically).
 
-**WARNING:** Before you submit your solution, you **MUST** pass every item on this list.
-If you miss any of these critical steps, your submission will be **automatically rejected** and you will **NOT** be invited to an interview.
+```bash
+docker-compose up --build
+```
 
-### 1. 📂 Repository & Code
+- **Swagger UI**: http://localhost:8000/docs
+- **Health check**: http://localhost:8000/
 
-- [ ] **Public Access:** Is your GitHub repository set to **Public**? (We cannot review private repos).
-- [ ] **Clean Code:** Did you remove unnecessary files (like `node_modules`, `.env` with real keys, or `.DS_Store`)?
-- [ ] **Run Check:** if we clone your repo and run `npm start` (or equivalent), does the server start immediately without crashing?
 
-### 2. 📄 Documentation (Crucial)
 
-- [ ] **Architecture Diagram:** Did you include a visual Diagram (Flowchart or Sequence Diagram) in the README?
-- [ ] **README Swap:** Did you **DELETE** the original instructions (the problem brief) from this file and replace it with your own documentation?
-- [ ] **API Docs:** Is there a clear list of Endpoints and Example Requests in the README?
+## API Documentation
 
-### 3. 🧹 Git Hygiene
+### Base URL
 
-- [ ] **Commit History:** Does your repo have multiple commits with meaningful messages? (A single "Initial Commit" is a red flag).
+```
+http://127.0.0.1:8000
+```
 
----
 
-**Ready?**
-If you checked all the boxes above, submit your repository link in the application form. Good luck! 🚀
+
+### GET `/`
+
+Health check.
+
+**Response `200 OK`:**
+```json
+{
+  "status": "healthy",
+  "service": "FinSafe Idempotency API",
+  "version": "1.0.0"
+}
+```
+
+
+
+### POST `/process-payment`
+
+Submit a payment for processing with idempotency guarantees.
+
+**Headers:**
+
+| Header            | Required | Description                                       |
+|-|-||
+| `Idempotency-Key` | Yes      | Unique client-generated key (UUID v4 recommended) |
+| `Content-Type`    | Yes      | `application/json`                                |
+
+**Request body:**
+
+```json
+{
+  "amount": 100.0,
+  "currency": "GHS"
+}
+```
+
+| Field      | Type   | Rules                                                                           |
+||--||
+| `amount`   | float  | Must be greater than 0                                                          |
+| `currency` | string | Exactly 3 characters, ISO 4217 (e.g. GHS, USD, RWF). Normalised to uppercase.  |
+
+**Response body (`201 Created`):**
+
+```json
+{
+  "transaction_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+  "status": "success",
+  "message": "Charged 100.0 GHS",
+  "amount": 100.0,
+  "currency": "GHS",
+  "timestamp": "2026-05-23T10:30:00.123456+00:00"
+}
+```
+
+**Response headers:**
+
+| Header             | Present when                   | Value                    |
+|--|--|--|
+| `X-Transaction-ID` | Every successful response      | UUID of the transaction  |
+| `X-Cache-Hit`      | Duplicate (replayed) requests  | `true`                   |
+
+**Status codes:**
+
+| Code  | Scenario                                                         |
+|-||
+| `201` | First request — payment charged and stored                       |
+| `201` | Duplicate request — cached result replayed (`X-Cache-Hit: true`) |
+| `409` | Same key reused with a different request body                    |
+| `422` | Validation error — invalid amount, bad currency, missing header  |
+
+
+
+### Example curl commands
+
+**First payment (201):**
+```bash
+curl -X POST http://127.0.0.1:8000/process-payment \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: test-key-001" \
+  -d '{"amount": 100, "currency": "GHS"}'
+```
+
+**Retry same request (201 + X-Cache-Hit: true):**
+```bash
+curl -v -X POST http://127.0.0.1:8000/process-payment \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: test-key-001" \
+  -d '{"amount": 100, "currency": "GHS"}'
+```
+
+**Fraud attempt — same key, different amount (409):**
+```bash
+curl -X POST http://127.0.0.1:8000/process-payment \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: test-key-001" \
+  -d '{"amount": 999, "currency": "GHS"}'
+```
+
+**Missing header (422):**
+```bash
+curl -X POST http://127.0.0.1:8000/process-payment \
+  -H "Content-Type: application/json" \
+  -d '{"amount": 100, "currency": "GHS"}'
+```
+
+
+
+## Design Decisions
+
+**1. Per-key `asyncio.Lock` for race-condition safety**
+The lock is acquired before reading the store. If Request A holds it while the bank call runs, Request B blocks at `async with lock`. When A finishes and releases the lock, B reads the now-COMPLETED record and returns it as a cache hit — no double charge, no 409.
+
+**2. SHA-256 payload fingerprinting with `sort_keys=True`**
+The request body is serialised with `json.dumps(sort_keys=True)` before hashing. This ensures `{"b": 2, "a": 1}` and `{"a": 1, "b": 2}` produce the same fingerprint and do not cause false 409 conflicts on retries.
+
+**3. Currency normalised to uppercase**
+`"ghs"` and `"GHS"` are treated as the same payload. Without this, a retry that differs only in currency case would fail the hash check and return a spurious 409.
+
+**4. Status code 201 on both first request and cache hit**
+The rubric requires the server to return the exact same status code as the first successful request. The `X-Cache-Hit: true` header is the signal that distinguishes a replayed response from a fresh one.
+
+**5. Upstash Redis as the backing store**
+All idempotency records are persisted in Upstash Redis (a managed, serverless Redis). Each key is stored with a 24-hour TTL set natively via Redis `EX` — no background cleanup loop needed. The store interface (`get_record`, `create_record`, `complete_record`) is isolated in `services/store.py`, so swapping to a different Redis provider is a one-line config change. Tests bypass the real connection entirely using `fakeredis`.
+
+**6. Global exception handler**
+An unhandled exception returns a clean `500` JSON response instead of leaking a Python stack trace to the client — important for any public-facing financial API.
+
+
+
+## Developer's Choice — `X-Transaction-ID` Header
+
+**What it is:** Every successful payment response includes an `X-Transaction-ID` response header containing the UUID generated by the bank processor.
+
+**Why it matters:** In a real fintech system, clients need a stable reference ID to:
+- Reconcile payments against their own records
+- Open support tickets ("transaction ID: abc-123 was charged but not reflected")
+- Audit logs and compliance reporting
+
+Without it, the client would have to parse the response body every time to extract the ID. A dedicated header makes it accessible with a single `response.headers["X-Transaction-ID"]` lookup, consistent across both fresh and cached responses.
